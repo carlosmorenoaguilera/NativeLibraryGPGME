@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using static NativeLibraryGPGME.GPGME.GPGMEService;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace NativeLibraryGPGME.GPGME
 {
@@ -46,7 +47,7 @@ namespace NativeLibraryGPGME.GPGME
 
 
         [DllImport("libgpgme-11.dll", CallingConvention = CallingConvention.Cdecl)]
-        public static extern int gpgme_check_version(IntPtr version);
+        public static extern IntPtr gpgme_check_version(IntPtr version);
 
 
 
@@ -61,6 +62,17 @@ namespace NativeLibraryGPGME.GPGME
 
         [DllImport("libgpgme-11.dll")]
         public static extern int gpgme_data_new_from_mem(out IntPtr dh, string buffer, int size, int copy);
+
+
+        [DllImport("libgpgme-11.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern int gpgme_data_new_from_mem(IntPtr data, int dataLen);
+
+
+
+
+        [DllImport("libgpgme-11.dll", EntryPoint = "gpgme_op_decrypt", CallingConvention = CallingConvention.Cdecl)]
+        public static unsafe extern int gpgme_decrypt(IntPtr ctx, IntPtr data, IntPtr *plaintext);
+
 
 
 
@@ -86,6 +98,8 @@ namespace NativeLibraryGPGME.GPGME
 
         [DllImport("kernel32.dll", CallingConvention = CallingConvention.Winapi)]
         public static extern IntPtr GetModuleHandle(string lpModuleName);
+
+
 
 
 
@@ -138,12 +152,19 @@ namespace NativeLibraryGPGME.GPGME
         //delegados
         public delegate int GpgmePassphraseCbDelegate(IntPtr ctx, int uid, int flags, out IntPtr passphrase, out int passphrase_size);
 
-        public static bool DecryptFile(string filePath, string passphrase, out string decryptedText)
+        public static unsafe bool DecryptFile(string filePath, string passphrase, out string decryptedText)
         {
             pass = passphrase;
             decryptedText = string.Empty;
 
-            IntPtr ctx = IntPtr.Zero;
+
+            IntPtr version = gpgme_check_version(IntPtr.Zero);
+
+            Console.WriteLine(Marshal.PtrToStringUTF8(version));
+
+
+
+            IntPtr ctx;
 
             //prueba para unmanaged type
 
@@ -151,7 +172,7 @@ namespace NativeLibraryGPGME.GPGME
             var err = gpgme_new(out ctx);
 
 
-            if (err == 0)
+            if (err != 0)
             {
                 int value = (int)err;
                 IntPtr errorPtr = gpgme_strerror(value);
@@ -160,24 +181,6 @@ namespace NativeLibraryGPGME.GPGME
                 Console.WriteLine("Error al crear el contexto: {0}", errorStr);
                 return false;
             }
-            //nint err = gpgme_new(0);
-
-            //if (ctx != IntPtr.Zero)
-            //{
-            //    return false;
-            //}
-
-            int version = gpgme_check_version(IntPtr.Zero);
-
-            if (version < GPGME_VERSION_CHECK)
-            {
-                Console.WriteLine("La versión de libgpgme es incompatible (versión mínima: {0:X})", GPGME_VERSION_CHECK);
-            }
-            else
-            {
-                Console.WriteLine("La versión de libgpgme es compatible (versión: {0:X})", version);
-            }
-
 
 
             GpgmePassphraseCbDelegate passphraseCallback = PassphraseCallback;
@@ -197,22 +200,70 @@ namespace NativeLibraryGPGME.GPGME
             IntPtr keydata;
             var errorNewFormMem = gpgme_data_new_from_mem(out keydata, keyData, -1, 0);
 
-
-
-
-            int gpgme_error = gpgme_op_import(ctx, keydata);
-
-
-
-            int  Errvalue = (int)gpgme_error;
-            IntPtr errorPtrImport = gpgme_strerror(Errvalue);
-            string errorStrImport = Marshal.PtrToStringAnsi(errorPtrImport);
-
-            if (gpgme_error != 0)
+            if (errorNewFormMem != 0)
             {
-                throw new Exception("Error al importar la llave: " + errorStrImport);
+                int ErrorNewFormMem = (int)errorNewFormMem;
+                IntPtr ErrorPtrFromMem = gpgme_strerror(ErrorNewFormMem);
+                Console.WriteLine("Error data_from_mem: " + Marshal.PtrToStringAnsi(ErrorPtrFromMem));
+                return false;
+
             }
 
+            int errorImport = gpgme_op_import(ctx, keydata);
+
+
+
+
+            if (errorImport != 0)
+            {
+
+                int Errvalue = (int)errorImport;
+                IntPtr errorPtrImport = gpgme_strerror(Errvalue);
+                string errorStrImport = Marshal.PtrToStringAnsi(errorPtrImport);
+                throw new Exception("Error al importar la llave: " + errorStrImport);
+            }
+            byte[] data = File.ReadAllBytes(filePath);
+
+
+
+
+
+
+            // obtener el puntero de array de bytes con Marshal para entregar en el metodo sobrecargado gpgme_data_new_from_mem que recibe un puntero de datos
+            IntPtr ptrData = Marshal.AllocHGlobal(data.Length);
+            Marshal.Copy(data, 0, ptrData, data.Length);
+
+
+
+
+
+            IntPtr gpgmeDataPtr = gpgme_data_new_from_mem(ptrData, data.Length);
+
+
+            IntPtr plaintextPtr = IntPtr.Zero;
+
+
+            // requerido modificador unsafe
+            int errorDecrypt = gpgme_decrypt(ctx, gpgmeDataPtr, &plaintextPtr);
+
+
+
+
+
+            if (errorDecrypt != 0)
+            {
+
+                int ErrDecrypt = (int)errorDecrypt;
+                IntPtr errorPtrDecrypt = gpgme_strerror(ErrDecrypt);
+                string errorStrDecrypt = Marshal.PtrToStringAnsi(errorPtrDecrypt);
+                Console.WriteLine("Error al importar la llave: " + errorStrDecrypt);
+                return false;
+            }
+
+            string plaintext = Marshal.PtrToStringAnsi(plaintextPtr);
+
+            Console.WriteLine(plaintext);
+            decryptedText = plaintext;
 
             gpgme_release(ctx);
 
