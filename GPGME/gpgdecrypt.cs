@@ -67,12 +67,23 @@ namespace NativeLibraryGPGME.GPGME
         [DllImport("libgpgme-11.dll", CallingConvention = CallingConvention.Cdecl)]
         public static extern int gpgme_data_new_from_mem(IntPtr data, int dataLen);
 
+        
+        [DllImport("libgpgme-11.dll", EntryPoint = "gpgme_data_new_from_mem", CallingConvention = CallingConvention.Cdecl)]
+        public static extern gpgme_data gpgme_data_new_from_mem_data(IntPtr data, int dataLen);
+
 
 
 
         [DllImport("libgpgme-11.dll", EntryPoint = "gpgme_op_decrypt", CallingConvention = CallingConvention.Cdecl)]
         public static unsafe extern int gpgme_decrypt(IntPtr ctx, IntPtr data, IntPtr *plaintext);
 
+
+        [DllImport("libgpgme-11.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static unsafe extern int gpgme_decrypt(IntPtr ctx, gpgme_data data, gpgme_data* plaintext);
+
+
+        [DllImport("libgpgme-11.dll", CallingConvention = CallingConvention.Cdecl)]
+        public static extern void gpgme_data_free(IntPtr data);
 
 
 
@@ -102,7 +113,7 @@ namespace NativeLibraryGPGME.GPGME
 
 
 
-
+        //struct 
         public struct gpgme_keylist_t
         {
             public IntPtr handle;
@@ -112,6 +123,15 @@ namespace NativeLibraryGPGME.GPGME
         {
             public IntPtr handle;
         };
+
+
+        public struct gpgme_data
+        {
+            public IntPtr data;
+            public int data_len;
+            public int flags;
+        }
+
 
 
         public static gpgme_key_t gpgme_key_read(string fname)
@@ -152,6 +172,10 @@ namespace NativeLibraryGPGME.GPGME
         //delegados
         public delegate int GpgmePassphraseCbDelegate(IntPtr ctx, int uid, int flags, out IntPtr passphrase, out int passphrase_size);
 
+        public unsafe delegate int GpgmeDecryptCallback(IntPtr ctx, gpgme_data data, gpgme_data* plaintext);
+
+
+
         public static unsafe bool DecryptFile(string filePath, string passphrase, out string decryptedText)
         {
             pass = passphrase;
@@ -170,6 +194,9 @@ namespace NativeLibraryGPGME.GPGME
 
 
             var err = gpgme_new(out ctx);
+
+           // gpgme_release(ctx);
+
 
 
             if (err != 0)
@@ -211,6 +238,9 @@ namespace NativeLibraryGPGME.GPGME
 
             int errorImport = gpgme_op_import(ctx, keydata);
 
+            // confirmar importacion con set gpgme_set_key
+
+            //gpgme_error err = gpgme_set_key(ctx, "-----BEGIN PGP PRIVATE KEY----- ... -----END PGP PRIVATE KEY-----");
 
 
 
@@ -237,30 +267,54 @@ namespace NativeLibraryGPGME.GPGME
 
 
 
-            IntPtr gpgmeDataPtr = gpgme_data_new_from_mem(ptrData, data.Length);
+            gpgme_data gpgmeDataPtr = gpgme_data_new_from_mem_data(ptrData, data.Length);
 
 
             IntPtr plaintextPtr = IntPtr.Zero;
 
 
             // requerido modificador unsafe
-            int errorDecrypt = gpgme_decrypt(ctx, gpgmeDataPtr, &plaintextPtr);
+            // int errorDecrypt = gpgme_decrypt(ctx, gpgmeDataPtr, &plaintextPtr);
 
-
-
-
-
-            if (errorDecrypt != 0)
+            GpgmeDecryptCallback callback = (ctx, gpgmeDataPtr, plaintext) =>
             {
+                // Descifrar los datos
+                int result = gpgme_decrypt(ctx, gpgmeDataPtr, plaintext);
 
-                int ErrDecrypt = (int)errorDecrypt;
-                IntPtr errorPtrDecrypt = gpgme_strerror(ErrDecrypt);
-                string errorStrDecrypt = Marshal.PtrToStringAnsi(errorPtrDecrypt);
-                Console.WriteLine("Error al importar la llave: " + errorStrDecrypt);
+                // Liberar la memoria
+                //gpgme_data_free(gpgmeDataPtr);
+
+                return result;
+            };
+
+
+            gpgme_data _plaintextPtr;
+
+            int decrtypresult = GpgmeDecrypt(ctx, gpgmeDataPtr, &_plaintextPtr, callback);
+
+
+
+            if (decrtypresult != 0)
+            {
+                Console.WriteLine("Error al descifrar los datos: {0}", result);
                 return false;
             }
 
-            string plaintext = Marshal.PtrToStringAnsi(plaintextPtr);
+            string plaintext = Marshal.PtrToStringAnsi(_plaintextPtr.data);
+
+
+
+            //if (errorDecrypt != 0)
+            //{
+
+            //    int ErrDecrypt = (int)errorDecrypt;
+            //    IntPtr errorPtrDecrypt = gpgme_strerror(ErrDecrypt);
+            //    string errorStrDecrypt = Marshal.PtrToStringAnsi(errorPtrDecrypt);
+            //    Console.WriteLine("Error al importar la llave: " + errorStrDecrypt);
+            //    return false;
+            //}
+
+            string plaintext_sec = Marshal.PtrToStringAnsi(plaintextPtr);
 
             Console.WriteLine(plaintext);
             decryptedText = plaintext;
@@ -268,6 +322,15 @@ namespace NativeLibraryGPGME.GPGME
             gpgme_release(ctx);
 
             return true;
+        }
+
+
+        public unsafe static int GpgmeDecrypt(IntPtr ctx, gpgme_data data, gpgme_data* plaintext, GpgmeDecryptCallback callback)
+        {
+            // ...
+
+            // Llamar al delegado
+            return callback(ctx, data, plaintext);
         }
 
 
